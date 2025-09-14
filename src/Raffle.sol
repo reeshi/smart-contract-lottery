@@ -33,6 +33,13 @@ contract Raffle {
     error Raffle_SendMoreToEnterRaffle();
 
     uint256 private immutable i_entranceFee;
+    // we store address of each player. since the winner address will receive money we need to make all the addresses payable in order to send them money.
+    address payable[] private s_players;
+
+    /*
+     * Events
+     */
+    event RaffleEntered(address indexed player);
 
     constructor(uint256 entranceFee) {
         i_entranceFee = entranceFee;
@@ -46,11 +53,17 @@ contract Raffle {
         if (msg.value < i_entranceFee) {
             revert Raffle_SendMoreToEnterRaffle();
         }
+        s_players.push(payable(msg.sender));
+
+        // Now it's a rule of thumb whenever we update storage variables we need to emit events.
+        emit RaffleEntered(msg.sender);
     }
 
     function pickWinner() public {}
 
-    /** Getter Functions */
+    /**
+     * Getter Functions
+     */
     function getEntranceFee() external view returns (uint256) {
         return i_entranceFee;
     }
