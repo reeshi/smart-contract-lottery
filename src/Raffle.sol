@@ -33,8 +33,17 @@ import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/V
  */
 contract Raffle is VRFConsumerBaseV2Plus {
     /* Errors */
-    error Raffle_SendMoreToEnterRaffle();
+    error Raffle__SendMoreToEnterRaffle();
+    error Raffle__TransferFailed();
+    error Raffle__RaffleNotOpen();
 
+    /** Type Declarations */
+    enum RaffleState {
+        OPEN,
+        CALCULATING
+    }
+
+    /** State Variables */
     uint16 private constant REQUEST_CONFIRMATIONS = 3;
     uint32 private constant NUM_WORDS = 1;
     uint256 private immutable i_entranceFee;
@@ -46,11 +55,14 @@ contract Raffle is VRFConsumerBaseV2Plus {
     address payable[] private s_players;
     uint256 private s_lastTimeStamp;
     uint256 private s_subscriptionId;
+    address private s_recentWinner;
+    RaffleState private s_raffleState;
 
     /*
      * Events
      */
     event RaffleEntered(address indexed player);
+    event WinnerPicked(address indexed winner);
 
     /** Raffle contract is inheriting VRFConsumerBaseV2Plus and VRFConsumerBaseV2Plus take's
      * vrfCoordinator parameter in the constructor that's why we need to call the contructor of that also
@@ -66,10 +78,12 @@ contract Raffle is VRFConsumerBaseV2Plus {
     ) VRFConsumerBaseV2Plus(vrfCoordinator) {
         i_entranceFee = entranceFee;
         i_interval = interval;
-        s_lastTimeStamp = block.timestamp;
-        i_keyHash = gaslane;
-        s_subscriptionId = subscriptionId;
         i_callbackGasLimit = callbackGasLimit;
+        i_keyHash = gaslane;
+
+        s_lastTimeStamp = block.timestamp;
+        s_subscriptionId = subscriptionId;
+        s_raffleState = RaffleState.OPEN;
     }
 
     // User able to buy ticket. that's why this function will be payable.
@@ -78,8 +92,13 @@ contract Raffle is VRFConsumerBaseV2Plus {
         // require(msg.value >= i_entranceFee, SendMoreEthToRaffle());
         // Below is the more gas efficient and better way to write condition.
         if (msg.value < i_entranceFee) {
-            revert Raffle_SendMoreToEnterRaffle();
+            revert Raffle__SendMoreToEnterRaffle();
         }
+
+        if (s_raffleState != RaffleState.OPEN) {
+            revert Raffle__RaffleNotOpen();
+        }
+
         s_players.push(payable(msg.sender));
 
         // Now it's a rule of thumb whenever we update storage variables we need to emit events.
@@ -95,6 +114,7 @@ contract Raffle is VRFConsumerBaseV2Plus {
             revert();
         }
 
+        s_raffleState = RaffleState.CALCULATING;
         VRFV2PlusClient.RandomWordsRequest memory request = VRFV2PlusClient
             .RandomWordsRequest({
                 keyHash: i_keyHash,
@@ -114,10 +134,35 @@ contract Raffle is VRFConsumerBaseV2Plus {
         uint256 requestId = s_vrfCoordinator.requestRandomWords(request);
     }
 
+    // CEI : Checks , Effects, Interactions Pattern
     function fulfillRandomWords(
         uint256 requestId,
         uint256[] calldata randomWords
-    ) internal virtual override {}
+    ) internal virtual override {
+        // Checks
+
+        // no of s_players = 10
+        // random_number = 34743643473874783487237834843
+        // winner_index = random_number % s_players
+
+        // Effect (Internal Contract State)
+        uint256 indexOfWinner = randomWords[0] % s_players.length;
+        address payable winner = s_players[indexOfWinner];
+        s_recentWinner = winner;
+
+        s_raffleState = RaffleState.OPEN;
+        // resetting the s_players array.
+        s_players = new address payable[](0);
+        // resetting the timestamp
+        s_lastTimeStamp = block.timestamp;
+        emit WinnerPicked(winner);
+
+        // Interactions (External Contract Interactions)
+        (bool success, ) = winner.call{value: address(this).balance}("");
+        if (!success) {
+            revert Raffle__TransferFailed();
+        }
+    }
 
     /**
      * Getter Functions
